@@ -242,14 +242,23 @@ class VideoProcessor:
             region_name=self.s3_region
         )
 
-    def download_from_url(self, url: str, local_path: str) -> bool:
+    def download_from_url(self, url: str, local_path: str, max_retries: int = 5, retry_delay: int = 3) -> bool:
         self.log(f"📥 Downloading video...")
-        response = requests.get(url, stream=True)
-        if response.status_code == 200:
-            with open(local_path, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    f.write(chunk)
-            return True
+        
+        for attempt in range(max_retries):
+            response = requests.get(url, stream=True)
+            if response.status_code == 200:
+                with open(local_path, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        f.write(chunk)
+                return True
+            elif response.status_code == 404 and attempt < max_retries - 1:
+                self.log(f"   ⏳ File not ready yet, waiting {retry_delay}s... (attempt {attempt + 1}/{max_retries})")
+                time.sleep(retry_delay)
+            else:
+                self.log(f"   ❌ Download failed with status {response.status_code}")
+                return False
+        
         return False
 
     def upload_to_s3(self, local_path: str, s3_key: str, content_type: str = "video/mp4") -> str:
