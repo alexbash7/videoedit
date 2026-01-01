@@ -245,6 +245,11 @@ class VideoProcessor:
     def download_from_url(self, url: str, local_path: str, max_retries: int = 5, retry_delay: int = 3) -> bool:
         self.log(f"📥 Downloading video...")
         
+        # Check if this is a Wasabi S3 URL - download via S3 API
+        if "wasabisys.com" in url:
+            return self._download_from_s3(url, local_path, max_retries, retry_delay)
+        
+        # Regular HTTP download
         for attempt in range(max_retries):
             response = requests.get(url, stream=True)
             if response.status_code == 200:
@@ -252,12 +257,60 @@ class VideoProcessor:
                     for chunk in response.iter_content(chunk_size=8192):
                         f.write(chunk)
                 return True
-            elif response.status_code == 404 and attempt < max_retries - 1:
+            elif response.status_code in (404, 403) and attempt < max_retries - 1:
                 self.log(f"   ⏳ File not ready yet, waiting {retry_delay}s... (attempt {attempt + 1}/{max_retries})")
                 time.sleep(retry_delay)
             else:
                 self.log(f"   ❌ Download failed with status {response.status_code}")
                 return False
+        
+        return False
+
+    def _download_from_s3(self, url: str, local_path: str, max_retries: int = 5, retry_delay: int = 3) -> bool:
+        """Download file from Wasabi S3 using credentials"""
+        # Parse URL to get bucket and key
+        # URL format: https://BUCKET.s3.REGION.wasabisys.com/KEY
+        # or: https://s3.REGION.wasabisys.com/BUCKET/KEY
+        
+        parsed = urlparse(url)
+        host_parts = parsed.netloc.split('.')
+        
+        if host_parts[0] == 's3':
+            # Path style: https://s3.region.wasabisys.com/bucket/key
+            path_parts = parsed.path.lstrip('/').split('/', 1)
+            bucket = path_parts[0]
+            key = path_parts[1] if len(path_parts) > 1 else ''
+        else:
+            # Virtual hosted style: https://bucket.s3.region.wasabisys.com/key
+            bucket = host_parts[0]
+            key = parsed.path.lstrip('/')
+        
+        self.log(f"   S3 bucket: {bucket}, key: {key}")
+        
+        # Create S3 client for this bucket
+        s3 = boto3.client(
+            's3',
+            endpoint_url=self.s3_endpoint,
+            aws_access_key_id=self.aws_access_key,
+            aws_secret_access_key=self.aws_secret_key,
+            region_name=self.s3_region
+        )
+        
+        for attempt in range(max_retries):
+            try:
+                s3.download_file(bucket, key, local_path)
+                return True
+            except Exception as e:
+                if "404" in str(e) or "NoSuchKey" in str(e):
+                    if attempt < max_retries - 1:
+                        self.log(f"   ⏳ File not ready yet, waiting {retry_delay}s... (attempt {attempt + 1}/{max_retries})")
+                        time.sleep(retry_delay)
+                    else:
+                        self.log(f"   ❌ File not found after {max_retries} attempts")
+                        return False
+                else:
+                    self.log(f"   ❌ S3 download error: {e}")
+                    return False
         
         return False
 
