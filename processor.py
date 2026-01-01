@@ -667,3 +667,97 @@ Transcript (first 500 chars):
                 "reduction_percent": reduction,
                 "cost": total_cost
             }
+
+    def process_and_overwrite(self, url: str) -> dict:
+        """
+        Process video and overwrite the original file on S3.
+        Returns dict with processing results.
+        """
+        self.log(f"\n{'='*60}")
+        self.log(f"🎬 PROCESSING VIDEO (overwrite mode)")
+        self.log(f"{'='*60}\n")
+
+        # Parse original URL to get bucket and key
+        parsed = urlparse(url)
+        host_parts = parsed.netloc.split('.')
+        
+        if host_parts[0] == 's3':
+            path_parts = parsed.path.lstrip('/').split('/', 1)
+            bucket = path_parts[0]
+            original_key = path_parts[1] if len(path_parts) > 1 else ''
+        else:
+            bucket = host_parts[0]
+            original_key = parsed.path.lstrip('/')
+
+        total_cost = 0
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir = Path(tmpdir)
+
+            original_name = unquote(urlparse(url).path.split("/")[-1])
+            input_video = tmpdir / original_name
+
+            if not self.download_from_url(url, str(input_video)):
+                raise Exception("Failed to download video")
+
+            original_duration = self.get_video_duration(str(input_video))
+            self.log(f"   Duration: {self.format_duration(original_duration)}")
+
+            # Pass 1 - remove fillers
+            pass1_output = tmpdir / "pass1.mp4"
+            fillers1, cost1, transcript1 = self.remove_fillers_pass(
+                str(input_video), str(pass1_output), "Pass 1", "best"
+            )
+            total_cost += cost1
+
+            # Pass 2 - catch remaining fillers
+            pass2_output = tmpdir / "pass2.mp4"
+            fillers2, cost2, _ = self.remove_fillers_pass(
+                str(pass1_output), str(pass2_output), "Pass 2", "best"
+            )
+            total_cost += cost2
+
+            # Apply studio sound
+            studio_output = tmpdir / "studio.mp4"
+            self.apply_studio_sound(str(pass2_output), str(studio_output))
+
+            # Apply Resemble AI voice conversion
+            resemble_output = tmpdir / "resemble.mp4"
+            resemble_cost = self.apply_resemble_voice(str(studio_output), str(resemble_output))
+            total_cost += resemble_cost
+
+            final_duration = self.get_video_duration(str(resemble_output))
+
+            # Generate title for logging
+            title = self.generate_title(transcript1.get("text", ""))
+            total_cost += 0.001
+
+            # Overwrite original file on S3
+            self.log(f"📤 Overwriting original file on S3...")
+            s3 = self.get_s3_client()
+            s3.upload_file(
+                str(resemble_output),
+                bucket,
+                original_key,
+                ExtraArgs={'ACL': 'public-read', 'ContentType': 'video/mp4'}
+            )
+
+            reduction = int((1 - final_duration / original_duration) * 100)
+
+            # Append to HTML log
+            append_log(self.log_path, title, original_duration, final_duration, total_cost, url)
+
+            self.log(f"\n{'='*60}")
+            self.log(f"✅ {title}")
+            self.log(f"📎 {url} (overwritten)")
+            self.log(f"💰 ${total_cost:.2f} | {self.format_duration(original_duration)} → {self.format_duration(final_duration)} (-{reduction}%)")
+            self.log(f"{'='*60}\n")
+
+            return {
+                "link": url,
+                "title": title,
+                "original_duration": original_duration,
+                "final_duration": final_duration,
+                "reduction_percent": reduction,
+                "cost": total_cost
+            }

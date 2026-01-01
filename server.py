@@ -78,7 +78,7 @@ async def create_link(
 ):
     """
     Kutt-compatible endpoint.
-    Receives video URL, processes it, returns processed URL.
+    Receives video URL, returns it immediately, processes in background.
     """
     # Verify API key
     if x_api_key != EXPECTED_API_KEY:
@@ -93,17 +93,24 @@ async def create_link(
         print(f"   Not a video, returning original URL")
         return {"link": video_url}
     
-    try:
-        # Process video (this is blocking, run in thread pool)
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(executor, processor.process, video_url)
-        
-        return {"link": result["link"]}
+    # Start background processing
+    import threading
+    thread = threading.Thread(target=process_video_background, args=(video_url,))
+    thread.start()
     
+    # Return original URL immediately
+    print(f"   Returning original URL, processing in background...")
+    return {"link": video_url}
+
+
+def process_video_background(video_url: str):
+    """Process video in background and overwrite original on S3"""
+    try:
+        print(f"🔄 Background processing started for: {video_url}")
+        result = processor.process_and_overwrite(video_url)
+        print(f"✅ Background processing complete: {result}")
     except Exception as e:
-        print(f"❌ Error processing video: {e}")
-        # On error, return original URL so Dropshare doesn't fail
-        return {"link": video_url}
+        print(f"❌ Background processing error: {e}")
 
 
 if __name__ == "__main__":
