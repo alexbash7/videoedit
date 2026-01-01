@@ -323,7 +323,8 @@ class VideoProcessor:
             s3_key,
             ExtraArgs={'ACL': 'public-read', 'ContentType': content_type}
         )
-        return f"{self.s3_endpoint}/{self.s3_bucket}/{s3_key}"
+        # Return virtual-hosted style URL: https://bucket.s3.region.wasabisys.com/key
+        return f"https://{self.s3_bucket}.s3.{self.s3_region}.wasabisys.com/{s3_key}"
 
     def upload_temp_audio_to_s3(self, local_path: str) -> str:
         timestamp = int(time.time())
