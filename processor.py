@@ -188,7 +188,7 @@ def append_log(log_path: Path, title: str, original_duration: float, final_durat
         )
         
         content = log_path.read_text()
-        content = content.replace("<!-- ROWS -->", row + "<!-- ROWS -->")
+        content = content.replace("<!-- ROWS -->", "<!-- ROWS -->\n" + row)
         log_path.write_text(content)
 
 
